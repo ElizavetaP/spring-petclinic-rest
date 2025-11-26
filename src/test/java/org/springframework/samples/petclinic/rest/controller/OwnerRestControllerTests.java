@@ -28,6 +28,7 @@ import org.springframework.samples.petclinic.mapper.OwnerMapper;
 import org.springframework.samples.petclinic.mapper.PetMapper;
 import org.springframework.samples.petclinic.mapper.VisitMapper;
 import org.springframework.samples.petclinic.model.Owner;
+import org.springframework.samples.petclinic.model.Pet;
 import org.springframework.samples.petclinic.rest.advice.ExceptionControllerAdvice;
 import org.springframework.samples.petclinic.rest.dto.OwnerDto;
 import org.springframework.samples.petclinic.rest.dto.PetDto;
@@ -48,7 +49,9 @@ import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 
+import static org.hamcrest.Matchers.nullValue;
 import static org.mockito.BDDMockito.given;
+import static org.springframework.samples.petclinic.utils.TestDataUtils.setWeightUniversal;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
@@ -108,15 +111,18 @@ class OwnerRestControllerTests {
 
         pets = new ArrayList<>();
         PetDto pet = new PetDto();
-        pets.add(pet.id(3)
+        pet.id(3)
             .name("Rosy")
             .birthDate(LocalDate.now())
-            .type(petType));
+            .type(petType);
+        setWeightUniversal(pet, 15.75);   // теперь безопасно для любого DTO
+        pets.add(pet);
 
         pet = new PetDto();
         pets.add(pet.id(4)
             .name("Jewel")
             .birthDate(LocalDate.now())
+            .weight(null)
             .type(petType));
 
         visits = new ArrayList<>();
@@ -139,6 +145,7 @@ class OwnerRestControllerTests {
         PetTypeDto petType = new PetTypeDto();
         PetDto pet = new PetDto();
         pet.id(id).name(name).birthDate(LocalDate.now()).type(petType.id(2).name("dog")).addVisitsItem(getTestVisitForPet(pet, 1));
+        setWeightUniversal(pet, 15.75);
         return pet;
     }
 
@@ -361,7 +368,24 @@ class OwnerRestControllerTests {
         System.err.println("--> newPetAsJSON=" + newPetAsJSON);
         this.mockMvc.perform(post("/api/owners/1/pets")
                 .content(newPetAsJSON).accept(MediaType.APPLICATION_JSON_VALUE).contentType(MediaType.APPLICATION_JSON_VALUE))
-            .andExpect(status().isCreated());
+            .andExpect(status().isCreated())
+            .andExpect(jsonPath("$.weight").value(15.75));
+    }
+
+    @Test
+    @WithMockUser(roles = "OWNER_ADMIN")
+    void testCreatePetWithNullWeight() throws Exception {
+        PetDto newPet = pets.get(1);
+        newPet.setId(999);
+        ObjectMapper mapper = new ObjectMapper();
+        mapper.registerModule(new JavaTimeModule());
+        mapper.setDateFormat(new SimpleDateFormat("yyyy-MM-dd"));
+        mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+        String newPetAsJSON = mapper.writeValueAsString(newPet);
+        this.mockMvc.perform(post("/api/owners/1/pets")
+                .content(newPetAsJSON).accept(MediaType.APPLICATION_JSON_VALUE).contentType(MediaType.APPLICATION_JSON_VALUE))
+            .andExpect(status().isCreated())
+            .andExpect(jsonPath("$.weight").value(nullValue()));
     }
 
     @Test
@@ -399,14 +423,12 @@ class OwnerRestControllerTests {
     @WithMockUser(roles = "OWNER_ADMIN")
     void testGetOwnerPetSuccess() throws Exception {
         var owner = ownerMapper.toOwner(owners.get(0));
-        given(this.clinicService.findOwnerById(2)).willReturn(owner);
-        var pet = petMapper.toPet(pets.get(0));
-        pet.setOwner(owner);
-        given(this.clinicService.findPetById(1)).willReturn(pet);
+       given(this.clinicService.findOwnerById(2)).willReturn(owner);
         this.mockMvc.perform(get("/api/owners/2/pets/1")
                 .accept(MediaType.APPLICATION_JSON))
             .andExpect(status().isOk())
-            .andExpect(content().contentType("application/json"));
+            .andExpect(content().contentType("application/json"))
+            .andExpect(jsonPath("$.weight").value(15.75));
     }
 
     @Test
@@ -435,11 +457,35 @@ class OwnerRestControllerTests {
     void testUpdateOwnersPetSuccess() throws Exception {
         int ownerId = owners.get(0).getId();
         int petId = pets.get(0).getId();
-        given(this.clinicService.findOwnerById(ownerId)).willReturn(ownerMapper.toOwner(owners.get(0)));
-        given(this.clinicService.findPetById(petId)).willReturn(petMapper.toPet(pets.get(0)));
+
         PetDto updatedPetDto = pets.get(0);
         updatedPetDto.setName("Rex");
         updatedPetDto.setBirthDate(LocalDate.of(2020, 1, 15));
+        setWeightUniversal(updatedPetDto, 25.0);
+        given(this.clinicService.findOwnerById(ownerId)).willReturn(ownerMapper.toOwner(owners.get(0)));
+        given(this.clinicService.findPetById(petId)).willReturn(petMapper.toPet(pets.get(0)));
+
+        ObjectMapper mapper = new ObjectMapper();
+        mapper.registerModule(new JavaTimeModule());
+        mapper.setDateFormat(new SimpleDateFormat("yyyy-MM-dd"));
+        mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+        String updatedPetAsJSON = mapper.writeValueAsString(updatedPetDto);
+        this.mockMvc.perform(put("/api/owners/" + ownerId + "/pets/" + petId)
+                .content(updatedPetAsJSON)
+                .accept(MediaType.APPLICATION_JSON_VALUE)
+                .contentType(MediaType.APPLICATION_JSON_VALUE))
+            .andExpect(status().isNoContent());
+    }
+
+    @Test
+    @WithMockUser(roles = "OWNER_ADMIN")
+    void testUpdateOwnersPetWithNullWeight() throws Exception {
+        int ownerId = owners.get(0).getId();
+        int petId = pets.get(0).getId();
+        PetDto updatedPetDto = pets.get(0);
+        updatedPetDto.setWeight(null);
+        given(this.clinicService.findOwnerById(ownerId)).willReturn(ownerMapper.toOwner(owners.get(0)));
+        given(this.clinicService.findPetById(petId)).willReturn(petMapper.toPet(pets.get(0)));
         ObjectMapper mapper = new ObjectMapper();
         mapper.registerModule(new JavaTimeModule());
         mapper.setDateFormat(new SimpleDateFormat("yyyy-MM-dd"));
